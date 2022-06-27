@@ -1,0 +1,99 @@
+version = 0.1
+
+# Development Environment configuration
+[dev]
+[dev.deploy]
+[dev.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = false
+region = "us-east-1"
+s3_bucket = "dev-sc-order-mgmt-bin"
+s3_prefix = "SAM-Transportation-Analytics/SAM-Device-Log"
+stack_name = "SAM-Device-Log-Stack"
+parameter_overrides = """
+    CloudTrailBucketName="dev-sc-order-mgmt-bin"
+    IngressBucketName="prod-sc-order-mgmt-staging" 
+    IngressPrefix="warehouse/device_log/log/"
+    CleansedBucketName="dev-sc-order-mgmt-reporting"
+    CleansedPrefix="device-log/concurrency/cleansed/"
+    ProcessedBucketName="dev-sc-order-mgmt-reporting"
+    ProcessedPrefix="device-log/concurrency/processed/"
+    ArtifactsBucketName="dev-sc-order-mgmt-bin"
+    EventRuleStatus="DISABLED" 
+    RoleName="TRDataPipelineAdminRole"
+    WorkerType="Standard"
+    SubNetID="subnet-056186c4743dc1706"
+    SecurityGroup="sg-00c9b5e14efba177c"
+"""
+tags = """
+    ****:createdby="owen.spangler@****.com" 
+    ****:businessdomain="supply_chain" 
+    ****:projectname="transportation_analytics" 
+    ****:environment="dev" 
+    ****:owner="Owen Spangler"
+"""
+[dev.build.parameters]
+
+# QA Environment configuration
+[qa]
+[qa.deploy]
+[qa.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = false
+region = "us-east-1"
+s3_bucket = "qa-sc-order-mgmt-bin"
+s3_prefix = "SAM-Transportation-Analytics/SAM-Device-Log"
+stack_name = "SAM-Device-Log-Stack"
+parameter_overrides = """
+    CloudTrailBucketName="qa-sc-order-mgmt-bin"
+    IngressBucketName="prod-sc-order-mgmt-staging" 
+    InputPrefix="warehouse/device_log/log/"
+    CleansedBucketName="qa-sc-order-mgmt-reporting"
+    CleansedPrefix="device-log/concurrency/cleansed/"
+    ProcessedBucketName="qa-sc-order-mgmt-reporting"
+    ProcessedPrefix="device-log/concurrency/processed/"
+    ArtifactsBucketName="qa-sc-order-mgmt-bin"
+    EventRuleStatus="DISABLED" 
+    RoleName="TRDataPipelineAdminRole"
+    WorkerType="Standard"
+"""
+tags = """
+    ****:createdby="owen.spangler@****.com" 
+    ****:businessdomain="supply_chain" 
+    ****:projectname="transportation_analytics" 
+    ****:environment="qa" 
+    ****:owner="Owen Spangler"
+"""
+[qa.build.parameters]
+
+# Production Environment configuration
+[prod]
+[prod.deploy]
+[prod.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = false
+region = "us-east-1"
+s3_bucket = "prod-sc-order-mgmt-bin"
+s3_prefix = "SAM-Transportation-Analytics/SAM-Device-Log"
+stack_name = "SAM-Device-Log-Stack"
+parameter_overrides = """
+    CloudTrailBucketName="prod-sc-order-mgmt-bin"
+    IngressBucketName="prod-sc-order-mgmt-staging" 
+    InputPrefix="warehouse/device_log/log/"
+    CleansedBucketName="prod-sc-order-mgmt-reporting"
+    CleansedPrefix="device-log/concurrency/cleansed/"
+    ProcessedBucketName="prod-sc-order-mgmt-reporting"
+    ProcessedPrefix="device-log/concurrency/processed/"
+    ArtifactsBucketName="prod-sc-order-mgmt-bin"
+    EventRuleStatus="DISABLED" 
+    RoleName="TRDataPipelineAdminRole"
+    WorkerType="Standard"
+"""
+tags = """
+    ****:createdby="owen.spangler@****.com" 
+    ****:businessdomain="supply_chain" 
+    ****:projectname="transportation_analytics" 
+    ****:environment="prod" 
+    ****:owner="Owen Spangler"
+"""
+[prod.build.parameters]

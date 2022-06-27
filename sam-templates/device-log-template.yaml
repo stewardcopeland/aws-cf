@@ -1,0 +1,268 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  SAM Template for Device log s3 warehouse to prepare for Last Mile App.
+Globals:
+  Function:
+    Timeout: 600
+    Handler: lambda_function.lambda_handler
+    Runtime: python3.8
+    
+Parameters:
+  CloudTrailBucketName:
+    Type: String
+    Description: CloudTrail Bucket Name to store the events.  
+  IngressBucketName:
+    Type: String
+    Description: Input Bucket Name to look device logs. 
+  IngressPrefix:
+    Type: String
+    Description: Input prefix to get device log.  
+  DimBucketName:
+    Type: String
+    Description: Bucket Name to look for other dimension file inputs. e.g. Vehicle VINs
+    Default: aap-dev-sc-order-mgmt-results
+  DimPrefix:
+    Type: String
+    Description: Input prefix to get other dimension file inputs. 
+    Default: vehicles/vin/w
+  CleansedBucketName:
+    Type: String
+    Description: Cleansed Bucket Name (BETWEEN Ingress/staging and Processed/ready-for-app-reporting). 
+  CleansedPrefix:
+    Type: String
+    Description: Input prefix to cleansed device log.  
+  ProcessedBucketName:
+    Type: String
+    Description: Fully Processed Bucket Name (Final destination, ready-for-app-reporting). 
+  ProcessedPrefix:
+    Type: String
+    Description: Input prefix to Fully processed device log. 
+  ArtifactsBucketName:
+    Type: String
+    Description: Artifacts Bucket Name (Glue will look for PySpark scripts here).   
+  EventRuleStatus:
+    Type: String
+    Default: DISABLED
+    AllowedValues: [ENABLED, DISABLED]
+    Description: Event Rule Status (By default disabled for DEV&QA environments and enabled for PROD)
+  RoleName:
+    Type: String
+    Description: IAM Role needed to be attached with pipeline resources.
+  TeamsWebHook:
+    Type: String
+    Description: TEAMS WebHook.
+
+Resources: 
+  S3EventsTrail:
+    Type: AWS::CloudTrail::Trail
+    Properties: 
+      EventSelectors: 
+        - DataResources: 
+            - Type: AWS::S3::Object
+              Values: 
+                - !Sub arn:aws:s3:::${DimBucketName}/
+          ReadWriteType: WriteOnly
+      IncludeGlobalServiceEvents: true
+      IsMultiRegionTrail: true
+      IsLogging: true
+      S3BucketName: !Ref CloudTrailBucketName
+      S3KeyPrefix: DataPipelinesTrail
+      TrailName: LastMileFilesTrail
+      
+  DeviceLogEventsRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: Device-Log-Process-Event-Rule
+      Description: Device Log Glue job Events Rule that runs every Monday
+      EventPattern:
+        source:
+          - aws.s3
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          eventSource:
+            - s3.amazonaws.com
+          eventName:
+            - CopyObject
+            - PutObject
+            - CompleteMultipartUpload
+            - RestoreObject
+          requestParameters:
+            bucketName: 
+              - !Ref DimBucketName
+            key: 
+              - prefix: !Ref DimPrefix
+      # ScheduleExpression: "cron(0 11 ? * 2 *)"  # If want a time-based trigger
+      State: !Ref EventRuleStatus 
+      Targets:
+        - Arn: !GetAtt ProcessEventLambda.Arn
+          Id: DeviceLogLambdaTarget 
+          # Input: # Do not need this, inputs will come from cloudTrail event & env_vars
+          ### Docs say : Valid JSON text passed to the target. If you use this property, NOTHING from the event text itself is passed to the target.
+      RoleArn: !Sub arn:aws:iam::${AWS::AccountId}:role/${RoleName}
+  
+  # S3EventQueue:
+    # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-sqs-queue.html#aws-resource-sqs-queue-syntax
+    # Type: AWS::SQS::Queue
+    # Properties: 
+    #   DelaySeconds: 10
+    #   # KmsDataKeyReusePeriodSeconds: Integer
+    #   # KmsMasterKeyId: String
+    #   MessageRetentionPeriod: 345600 # 4 Days
+    #   QueueName: S3EventQueue-Last-Mile
+    #   ReceiveMessageWaitTimeSeconds: 20
+    #   # RedriveAllowPolicy: Json
+    #   # RedrivePolicy: Json
+    #   VisibilityTimeout: 43200 # Retry every 12-Hours to validate business SQL 
+
+  ProcessEventLambda: # Strip out execution date from s3 event, pass it to Step Function
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/functions/receiveS3EventMsg  
+      Role: !Sub arn:aws:iam::${AWS::AccountId}:role/${RoleName}
+      Environment:
+        Variables:
+          SF_ARN: !Ref DeviceLogProcessingSF
+          SF_INPUT: !Sub "{
+                  \"LoadType\": \"DAILY_LOAD\",
+                  \"IngressBucketName\": \"${IngressBucketName}\" ,
+                  \"IngressPrefix\": \"${IngressPrefix}\",
+                  \"CleansedBucketName\": \"${CleansedBucketName}\",
+                  \"CleansedPrefix\": \"${CleansedPrefix}\",
+                  \"ProcessedBucketName\": \"${ProcessedBucketName}\",
+                  \"ProcessedPrefix\": \"${ProcessedPrefix}\",
+                  \"StartDate\": \"20210407\",
+                  \"EndDate\": \"20210407\"                      
+                  }"
+      # # # Don't want to trigger Lambda with SQS, since it will auto delete msg unless Lambda throws error.
+      # # # We want to wait till end of SF to confirm sqs msg can be deleted upon success.
+      # Events:
+      #   SQSEvent:
+      #     Type: SQS  
+
+  InvokeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt  ProcessEventLambda.Arn 
+      Action: lambda:InvokeFunction 
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DeviceLogEventsRule.Arn 
+
+  # sqlValidateLambda: # # # To Do - Lambda to validate sql against weekly historical record count
+  #   Type: AWS::Serverless::Function
+  #   Properties:
+  #     CodeUri: lambda/functions/sqlValidateResults  # To Do: Validate File listed in s3 msg has required data, use basic COUNT(*) to start
+  #     Role: !Sub arn:aws:iam::${AWS::AccountId}:role/${RoleName}
+  #     Environment:
+  #       Variables:
+  #         DATABASE: !Ref AthenaDB
+  #         TABLE: !Ref AthenaTable
+  #         RESULTS_BUCKET: !Ref ArtifactsBucketName # To Do: Parameterize array of queries to test
+            
+  DeviceLogCleanseJob:
+    Type: AWS::Glue::Job
+    Properties: 
+      Description: Job to process device logs for last-mile concurrency metrics
+      Command: 
+        Name: glueetl
+        ScriptLocation: !Sub "s3://${ArtifactsBucketName}/glue/spark/device-log-cleanse.py"
+      DefaultArguments:  
+        '--additional-python-modules': 'Shapely==1.8.0'
+        '--conf': 'spark.sql.sources.partitionOverwriteMode=dynamic'
+        "--ingress_bucket": !Ref IngressBucketName 
+        "--ingress_prefix": !Ref IngressPrefix 
+        "--cleansed_bucket": !Ref CleansedBucketName 
+        "--cleansed_prefix": !Ref CleansedPrefix 
+        '--load_type': 'DAILY_LOAD'
+      GlueVersion: 2.0
+      MaxCapacity: 6
+      Role: !Sub arn:aws:iam::${AWS::AccountId}:role/${RoleName}
+  
+  DeviceLogConcurJob:
+    Type: AWS::Glue::Job
+    Properties: 
+      Description: Job to process device logs for last-mile concurrency metrics
+      Command: 
+        Name: glueetl
+        ScriptLocation: !Sub "s3://${ArtifactsBucketName}/glue/spark/device-log-concurrency.py"
+      DefaultArguments: 
+        '--conf': 'spark.sql.sources.partitionOverwriteMode=dynamic'
+        "--cleansed_bucket": !Ref CleansedBucketName 
+        "--cleansed_prefix": !Ref CleansedPrefix      
+        "--processed_bucket": !Ref ProcessedBucketName 
+        "--processed_prefix": !Ref ProcessedPrefix 
+        '--load_type': 'DAILY_LOAD'
+      GlueVersion: 2.0
+      MaxCapacity: 6
+      Role: !Sub arn:aws:iam::${AWS::AccountId}:role/${RoleName}
+
+  DeviceLogProcessingSF:
+    
+    Type: AWS::Serverless::StateMachine 
+    Properties:
+      DefinitionUri: ../state-machine/device-log-pipeline.json
+      DefinitionSubstitutions:
+        DeviceLogCleaseGlueJob: !Ref DeviceLogCleanseJob
+        DeviceLogConcurGlueJob: !Ref DeviceLogConcurJob 
+        SNSTopicArn: !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:sendMSTeamsNotification
+        # # # If we used ECS instead of Glue, how to handle run-time errors inside the SF? -> https://stackoverflow.com/questions/63815158/aws-step-functions-and-fargate-task-container-runtime-error-does-not-cause-pipe
+        # ECSCluster: !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/R-Migration-Workloads 
+        # UtilTaskDefinition: !Ref UtilTaskDefinition
+        # TaskSubNet: !Ref SubNetID
+        # TaskSG: !Ref SecurityGroup
+
+      Role: !Sub arn:aws:iam::${AWS::AccountId}:role/${RoleName}
+  
+  
+  # EventBridgeToSqsPolicy: # To Do: determine if need policy for Lambda, in case we use Lambda instead of SQS
+  #   Type: AWS::SQS::QueuePolicy
+  #   Properties: 
+  #     PolicyDocument:
+  #       # Id: MyQueuePolicy
+  #       # Version: '2012-10-17' 
+  #       Statement: 
+  #       - Sid: Allow-EventBridge-SendMessage
+  #         Resource: !GetAtt S3EventQueue.Arn 
+  #         Effect: Allow
+  #         Principal:  
+  #           Service: events.amazonaws.com
+  #         Action: SQS:SendMessage
+  #     Queues: 
+  #       - !Ref S3EventQueue # "https://sqs:us-east-2.amazonaws.com/444455556666/queue2"
+
+  
+  SendTeamsNotificationLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/functions/sendTeamsNotification
+      Role: !Sub arn:aws:iam::${AWS::AccountId}:role/${RoleName}
+      Events:
+        SNSEvent:
+          Type: SNS
+          Properties:
+            Topic: !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:sendMSTeamsNotification
+      Environment:
+        Variables:
+          TEAMS_WEBHOOK: !Ref TeamsWebHook
+
+Outputs:
+  # Find out more about other implicit resources you can reference within SAM
+  # https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-specification-generated-resources.html
+  DeviceLogProcessSFOutput:
+    Description: "State Machine - DeviceLogProcessSF ARN"
+    Value: !GetAtt DeviceLogProcessingSF.Arn
+  
+  # SQSqueueName:
+  #   Description: SNS queue name
+  #   Value: !GetAtt S3EventQueue.QueueName
+
+  # SQSqueueARN:
+  #   Description: SQS queue ARN
+  #   Value: !GetAtt S3EventQueue.Arn
+
+  # SQSqueueURL:
+  #   Description: SQS queue URL
+  #   Value: !Ref S3EventQueue
+  
+

@@ -1,0 +1,91 @@
+{
+    "StartAt": "Cleanse-Device-Log",
+    "States": {
+        "Cleanse-Device-Log": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun.sync",
+            "Parameters": {
+                "JobName": "${DeviceLogCleaseGlueJob}",
+                "Arguments": {
+                    "--additional-python-modules": "Shapely==1.8.0",
+                    "--conf": "spark.sql.sources.partitionOverwriteMode=dynamic",
+                    "--ingress_bucket.$": "$.IngressBucketName",
+                    "--ingress_prefix.$": "$.IngressPrefix",
+                    "--cleansed_bucket.$": "$.CleansedBucketName",
+                    "--cleansed_prefix.$": "$.CleansedPrefix",
+                    "--load_type.$": "$.LoadType"
+                }               
+            },
+            "ResultSelector": {
+                "SNSNotification": "Device Log Cleased Ran successfully."
+            },
+            "ResultPath": null,
+            "Catch":[{
+                "ErrorEquals": [
+                    "States.ALL"
+                ],
+                "ResultPath": "$",
+                "Next": "Send_Notification"
+            }],
+            "Next": "Process-Device-Log"
+        },
+        "Process-Device-Log": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun.sync",
+            "Parameters": {
+                "JobName": "${DeviceLogConcurGlueJob}",
+                "Arguments": {
+                    "--conf": "spark.sql.sources.partitionOverwriteMode=dynamic",
+                    "--cleansed_bucket.$": "$.CleansedBucketName",
+                    "--cleansed_prefix.$": "$.CleansedPrefix",
+                    "--processed_bucket.$": "$.ProcessedBucketName",
+                    "--processed_prefix.$": "$.ProcessedPrefix",
+                    "--load_type.$": "$.LoadType"
+                }
+            },
+            "ResultSelector": {
+                "SNSNotification": "Device Log Concurrency Process Ran successfully."
+            },
+            "ResultPath": null,
+            "Catch": [{
+                "ErrorEquals": [
+                    "States.ALL"
+                ],
+                "ResultPath": "$",
+                "Next": "Send_Notification"
+            }],
+            "Next": "Job Succeeded"
+        },
+        "Job Succeeded": {
+            "Type": "Succeed"
+        },
+        "Send_Notification": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sns:publish",
+            "Parameters": {
+                "TopicArn": "${SNSTopicArn}",
+                "Message.$": "$",
+                "Subject.$": "$$.StateMachine.Name",
+                "MessageAttributes": {
+                    "ContextObject": {
+                        "DataType": "String",
+                        "StringValue.$": "$$"
+                    },
+                    "ExecutionARN": {
+                        "DataType": "String",
+                        "StringValue.$": "$$.Execution.Id"
+                    },
+                    "StateName": {
+                        "DataType": "String",
+                        "StringValue.$": "$$.State.Name"
+                    }
+                }
+            },
+            "ResultPath": null,
+            "Next": "Fail Workflow"
+        },
+        "Fail Workflow": {
+            "Type": "Fail"
+        }
+    }
+}
