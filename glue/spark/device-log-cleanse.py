@@ -72,18 +72,18 @@ spark = SparkSession(sc)
 # spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic") # This is set in Glue in Action > Edit Job > Job Parameters (key = --conf, value = spark.sql.sources.partitionOverwriteMode=dynamic )
 
 # To Do: use try/catch before running, check on any input files from s3://aap-dev-sc-order-mgmt-results/dl-lz
-input_filepath = 's3://aap-dev-sc-order-mgmt-results/dl-lz/store-address/addresses_master.csv'
-output_filepath = 's3://aap-dev-sc-order-mgmt-results/dl-cleansed/store-address/'
+input_filepath = 's3://dl-lz/address/addresses_master.csv'
+output_filepath = 's3://dl-cleansed/address/'
 df = spark.read.csv(input_filepath,header=True,inferSchema=True)
 df.write.mode('overwrite').parquet(output_filepath)
 
-input_filepath = 's3://aap-dev-sc-order-mgmt-results/dl-lz/store-geo/store_geo.csv'
-output_filepath = 's3://aap-dev-sc-order-mgmt-results/dl-cleansed/store-geo/'
+input_filepath = 's3://dl-lz/geo/geo.csv'
+output_filepath = 's3://dl-cleansed/geo/'
 df = spark.read.csv(input_filepath,header=True,inferSchema=True)
 df.write.mode('overwrite').parquet(output_filepath)
 
-input_filepath = 's3://aap-dev-sc-order-mgmt-results/vehicles/vin/master/vehicles_vin_master.csv'
-output_filepath = 's3://aap-dev-sc-order-mgmt-results/dl-cleansed/vehicle-inventory/'
+input_filepath = 's3://vehicles/vin/master/vehicles_vin_master.csv'
+output_filepath = 's3://dl-cleansed/vehicle-inventory/'
 df = spark.read.csv(input_filepath,header=True,inferSchema=True)
 df = df.withColumn('week_start',f.to_date('week_start', 'yyyy-MM-dd').alias('dt'))
 df = df.withColumn('week_end',f.to_date('week_end', 'yyyy-MM-dd').alias('dt'))
@@ -91,10 +91,7 @@ cols = ['year','period','week']
 df.repartition(*[f.col(c) for c in cols]).write.mode('overwrite').partitionBy(cols).parquet(output_filepath)
 
 ### device logs
-
-### New way, get edb-logs from rts s3 warehouse 's3://aap-prod-sc-order-mgmt-staging/warehouse/device_log/log/'
-output_filepath = cleansed_path # 's3://aap-dev-sc-order-mgmt-results/osRstudio/edb-log/'
-
+output_filepath = cleansed_path 
 
 start_dateTime = datetime.datetime.combine(
     date = start_date, time = datetime.datetime.min.time() ) 
@@ -102,6 +99,7 @@ start_dateTime = datetime.datetime.combine(
 end_dateTime = datetime.datetime.combine(
     date = end_date, time = datetime.datetime.min.time() ) 
 
+# Define User Defined Function: Convert hex values to latitude/longitude
 # wkb_udf = functions.udf(lambda p: wkb.loads(p, hex=True))
 @f.udf(returnType=StringType())  
 def wkb_udf(p):
@@ -126,7 +124,6 @@ def wkb_udf_long(po):
   else:
     return None
 
-# input_df = spark.read.parquet('s3://aap-prod-sc-order-mgmt-staging/warehouse/device_log/log/')
 input_df = spark.read.parquet(ingress_path)
 df = input_df.filter(f.col("timestamp").between(start_dateTime,end_dateTime))
 
@@ -138,6 +135,7 @@ w = Window().partitionBy("id").orderBy(f.col("last_modified_date").desc())
 
 df.withColumn("rn", f.row_number().over(w)).where(f.col("rn") == 1)
 
+# Implement hex to lat/long conversion in new columns
 df = df.withColumn('lat', wkb_udf_lat(wkb_udf('point')))
 df = df.withColumn('lon', wkb_udf_long(wkb_udf('point')))
 
